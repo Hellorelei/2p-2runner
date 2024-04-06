@@ -1,18 +1,23 @@
-"""WowHead quest parser, by Lorelei Chevroulet:
-This script (1) iterates all text files in a given folder through a predefined
-filter. It (2) discards files missing specific tokens, and (3) extracts
-the desired tokens in new text files a specified folder.
+"""2p-2runner: a WowHead quest parser, by Lorelei Chevroulet.
+This program provides utilities to parse the contents of typical WowHead quest info pages.
+It contains the following tools:
+* HTML tag remover using basic Python find()
+* HTML to markdown conversion using the html2text module
+* Selection of specific markdown content based on headers
+* Exclusion of empty or short quest files
+* Random selection of n files from a directory. 
 """
 import sys
 import os
 from pathlib import Path
+from multiprocessing import Pool, cpu_count
 import glob
 import time
 import random
 import html2text
 
 
-class ansi:
+class Ansi:
     HEADER = '\033[95m'
     BR_MAGENTA = '\033[95m'
     BR_BLUE = '\033[94m'
@@ -52,59 +57,69 @@ LOGO = '''
     |_|                                
 '''
 
-PROMPT = '    ' + ansi.DIM + '>' + ansi.ENDC
+PROMPT = '    ' + Ansi.DIM + '>' + Ansi.ENDC
+
+total_files_processed = 0  # Used to track multiprocessing
+total_files_queued = 0  # Used to track queued files in multiprocessing
 
 
-# Code du module
 def main():
-    '''Main script. Iterates over text files.'''
+    """Main script. Loop and mode selection."""
     print(40 * '░')
     print(
-        ansi.BOLD + LOGO + ansi.ENDC
-        + '\n version 1.0, © Lorelei Chevroulet' + 2 * '\n'
+        Ansi.BOLD + LOGO + Ansi.ENDC
+        + '\n version 2.0, © Lorelei Chevroulet' + 2 * '\n'
     )
     while True:
         mode = select_mode()
         print('\n')
         if mode == '1':
-            prune_html()
+            text_conversion()
         elif mode == '2':
             export_long()
         elif mode == '3':
             pick_rand()
         else:
-            print(ansi.FAIL + 'Error: mode ' + mode + ' does not exist.' + ansi.ENDC)
+            print(Ansi.FAIL + 'Error: mode ' + mode + ' does not exist.' + Ansi.ENDC)
             sys.exit()
 
 
 def select_mode():
+    """Mode selection dialogue."""
     print(
-        ansi.BOLD
+        Ansi.BOLD
         + '1)  Select mode: \n\n'
-        + ansi.ENDC
-        + '    1: Prune HTML or Markdown\n'
-        + '    2: Filter longer text files \n'
+        + Ansi.ENDC
+        + '    1: Prune HTML or convert to markdown\n'
+        + '    2: Select longer text files \n'
         + '    3: Pick n random files\n'
     )
     return input(PROMPT)
 
 
-def select_dir():
-    print(ansi.BOLD + '2)  Enter text files directory:\n' + ansi.ENDC)
+def select_dir_prompt():
+    """Directory selection prompt."""
     directory = Path(input(PROMPT).strip().replace("\\", ""))
-    print(f'\n    Looking for \'{ansi.BR_BLUE}{directory}{ansi.ENDC}\'...')
+    print(f'\n    Looking for \'{Ansi.BR_BLUE}{directory}{Ansi.ENDC}\'...')
     if not directory.exists():
-        print('\n' + ansi.FAIL + ansi.BOLD
-              + f'    Path \'{ansi.BR_BLUE}{directory}{ansi.FAIL}\' not found.'
-              + ansi.ENDC
+        print('\n' + Ansi.FAIL + Ansi.BOLD
+              + f'    Path \'{Ansi.BR_BLUE}{directory}{Ansi.FAIL}\' not found.'
+              + Ansi.ENDC
               )
         sys.exit()
+    return directory
+
+
+def select_input_dir():
+    """Input directory selection with confirmation of n files existing."""
+    print(Ansi.BOLD + '2)  Enter text files directory:\n' + Ansi.ENDC)
+    directory = select_dir_prompt()
     print(
         '\n    '
-        + ansi.BR_GREEN + ansi.BOLD
+        + Ansi.BR_GREEN + Ansi.BOLD
         + str(len(list(directory.glob('*'))))
         + ' file(s) found'
-        + ansi.ENDC
+        + Ansi.ENDC
         + '. Continue? y/n \n'
     )
     if input(PROMPT) == 'y':
@@ -115,20 +130,14 @@ def select_dir():
 
 
 def select_out_dir():
-    print(ansi.BOLD + '3)  Enter output directory:\n' + ansi.ENDC)
-    out_dir = Path(input(PROMPT).strip().replace("\\", ""))
-    print(f'\n    Looking for \'{ansi.BR_BLUE}{out_dir}{ansi.ENDC}\'...')
-    if not out_dir.exists():
-        print('\n' + ansi.FAIL + ansi.BOLD
-              + f'    Path \'{ansi.BR_BLUE}{out_dir}{ansi.FAIL}\' not found.'
-              + ansi.ENDC
-              )
-        sys.exit()
+    """Output directory selection with confirmation of directory existence."""
+    print(Ansi.BOLD + '3)  Enter output directory:\n' + Ansi.ENDC)
+    out_dir = select_dir_prompt()
     print(
         '\n    '
-        + ansi.BR_GREEN + ansi.BOLD
+        + Ansi.BR_GREEN + Ansi.BOLD
         + 'Directory found'
-        + ansi.ENDC
+        + Ansi.ENDC
         + '. Continue? y/n \n'
     )
     if input(PROMPT) == 'y':
@@ -138,45 +147,78 @@ def select_out_dir():
         sys.exit()
 
 
-def select_version():
+def select_conversion_tool():
     print(
-        ansi.BOLD
-        + '    Select parser version: \n\n'
-        + ansi.ENDC
-        + '    1: V1 (HTML)\n'
-        + '    2: V2 (html2text) \n'
-        + '    3: V3 (Markdown)\n'
+        Ansi.BOLD
+        + '    Select tool: \n\n'
+        + Ansi.ENDC
+        + '    1: HTML remover via Python find().\n'
+        + '    2: HTML to markdown translation via html2text module. \n'
+        + '    3: Extraction of specific markdown content via Python find().\n'
     )
     return input(PROMPT)
 
 
-def prune_html():
-    version = select_version()
+def text_conversion():
+    global total_files_queued
+    conversion_tool = select_conversion_tool()
     print('\n')
-    directory = select_dir()
+    input_directory = select_input_dir()
     out_directory = select_out_dir()
-    print(ansi.BOLD + '4)  Processing file(s):' + 3 * '\n' + ansi.ENDC)
+    total = str(len(list(input_directory.glob('*'))))
+    print(
+        f'{Ansi.BOLD}4)  Processing file(s): {Ansi.ENDC}\n\n'
+        + f'    Total file(s): {Ansi.BOLD}{total:6}{Ansi.ENDC}'
+    )
+    available_cpu = cpu_count() - 1
+    print(
+        f'    Using {Ansi.BOLD}{available_cpu}{Ansi.ENDC} CPU core(s) for multithreading.\n\n\n'
+    )
+    pool = Pool(processes=(cpu_count() - 1))  # Create a pool with one slot fewer than amount of cpu cores.
     num = 0
-    total = str(len(list(directory.glob('*'))))
-    for file in directory.iterdir():
+    conversion_progress(total=total, status='init')
+    for file in input_directory.iterdir():
         num += 1
-        print(
-            2 * (ansi.UP + ansi.CLINE)
-            + f'    {ansi.BR_BLUE}{num:6}{ansi.ENDC}/{total:6} | File name\n'
-            + 20 * ' ' + file.name
+        total_files_queued = num
+        pool.apply_async(
+            conversion_process, args=(conversion_tool, file, out_directory),
+            callback=conversion_progress
         )
-        if not file.name == '.DS_Store':
-            content = import_text(file)
-            if version == '1':
-                export = html_slice(content)
-            elif version == '2':
-                export = html_slice_v2(content)
-            elif version == '3':
-                export = markdown_slice(content)
-            else:
-                sys.exit()
-            if export is not None:
-                export_text(out_directory, export, file.name)
+    pool.close()
+    pool.join()
+    print(
+        f'\n    {Ansi.BOLD}{Ansi.BR_GREEN}Process complete{Ansi.ENDC}. \n'
+    )
+
+
+def conversion_progress(*args, **kwargs):
+    global total_files_processed
+    global total_files_queued
+    if kwargs.get('status', None) == 'init':
+        total_files_processed = 0
+    else:
+        total_files_processed = total_files_processed + 1
+    print(
+        2 * (Ansi.UP + Ansi.CLINE)
+        + f'    Files queued     Files processed\n'
+        + f'    {Ansi.BOLD}{total_files_queued:12}{Ansi.ENDC}  /  '
+        + f'{Ansi.BR_GREEN}{Ansi.BOLD}{total_files_processed:<12}{Ansi.ENDC}'
+    )
+
+
+def conversion_process(conversion_tool, file, out_directory):
+    if not file.name == '.DS_Store':
+        content = import_text(file)
+        if conversion_tool == '1':
+            export = html_slice(content)
+        elif conversion_tool == '2':
+            export = html_to_markdown(content)
+        elif conversion_tool == '3':
+            export = markdown_slice(content)
+        else:
+            sys.exit()
+        if export is not None:
+            export_text(out_directory, export, file.name)
 
 
 def import_text(file):
@@ -185,26 +227,26 @@ def import_text(file):
             return file.read()
     except Exception:
         print(
-            ansi.FAIL + ansi.BOLD
+            Ansi.FAIL + Ansi.BOLD
             + 'Error while accessing file '
             + file.name
-            + ansi.ENDC
+            + Ansi.ENDC
             + 4 * '\r'
         )
 
 
 def export_long():
-    directory = select_dir()
+    directory = select_input_dir()
     out_directory = select_out_dir()
-    print(ansi.BOLD + '4)  Processing file(s):' + 3 * '\n' + ansi.ENDC)
+    print(Ansi.BOLD + '4)  Processing file(s):' + 3 * '\n' + Ansi.ENDC)
     num = 0
     num_file = 0
     total = str(len(list(directory.glob('*'))))
     for file in directory.iterdir():
         num += 1
         print(
-            2 * (ansi.UP + ansi.CLINE)
-            + f'    {ansi.BR_BLUE}{num:6}{ansi.ENDC}/{total:6} | File name\n'
+            2 * (Ansi.UP + Ansi.CLINE)
+            + f'    {Ansi.BR_BLUE}{num:6}{Ansi.ENDC}/{total:6} | File name\n'
             + 20 * ' ' + file.name
         )
         time.sleep(0)
@@ -222,10 +264,10 @@ def export_long():
 
 
 def pick_rand():
-    directory = select_dir()
+    directory = select_input_dir()
     out_directory = select_out_dir()
     n = int(input('3.5) How many random files? \n' + PROMPT))
-    print(ansi.BOLD + '4)  Processing file(s):' + 3 * '\n' + ansi.ENDC)
+    print(Ansi.BOLD + '4)  Processing file(s):' + 3 * '\n' + Ansi.ENDC)
     num = 0
     num_file = 0
     total = str(len(list(directory.glob('*'))))
@@ -235,15 +277,13 @@ def pick_rand():
     for file in directory.iterdir():
         num += 1
         print(
-            2 * (ansi.UP + ansi.CLINE)
-            + f'    {ansi.BR_BLUE}{num:6}{ansi.ENDC}/{total:6} | File name\n'
+            2 * (Ansi.UP + Ansi.CLINE)
+            + f'    {Ansi.BR_BLUE}{num:6}{Ansi.ENDC}/{total:6} | File name\n'
             + 20 * ' ' + file.name
         )
-        time.sleep(0)
         if not file.name == '.DS_Store':
             if file in picked_files:
-                content = import_text(file)
-                export = content
+                export = import_text(file)
                 if export is not None:
                     export_text(out_directory, export, file.name)
                     num_file = num_file + 1
@@ -280,13 +320,16 @@ def html_slice(content):
         k = test2.find('<')
         l = test2.find('>')
         test2 = test2[0:k] + test2[l + 1:len(test2)]
-        time.sleep(0)
     return test2
 
 
-def html_slice_v2(content):
-    sliced_text = html2text.html2text(content)
-    return sliced_text
+def html_to_markdown(content):
+    try:
+        translated_text = html2text.html2text(content)
+    except AttributeError:
+        return
+    return translated_text
+
 
 def markdown_slice(content):
     i = 0
@@ -321,6 +364,7 @@ def markdown_slice(content):
     if k != -1:
         sliced_text = sliced_text + content[k + 13:kk]
     return sliced_text
+
 
 # End-of-file (EOF)
 if __name__ == "__main__":
