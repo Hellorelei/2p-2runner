@@ -79,6 +79,8 @@ def main():
             export_long()
         elif mode == '3':
             pick_rand()
+        elif mode == '4':
+            match_list()
         else:
             print(Ansi.FAIL + 'Error: mode ' + mode + ' does not exist.' + Ansi.ENDC)
             sys.exit()
@@ -92,7 +94,8 @@ def select_mode():
         + Ansi.ENDC
         + '    1: Prune HTML or convert to markdown\n'
         + '    2: Select longer text files \n'
-        + '    3: Pick n random files\n'
+        + '    3: Select n files (randomly or sequentially)\n'
+        + '    4: Match files against list\n'
     )
     return input(PROMPT)
 
@@ -266,14 +269,23 @@ def export_long():
 def pick_rand():
     directory = select_input_dir()
     out_directory = select_out_dir()
-    n = int(input('3.5) How many random files? \n' + PROMPT))
-    print(Ansi.BOLD + '4)  Processing file(s):' + 3 * '\n' + Ansi.ENDC)
+    mode = str(input(Ansi.BOLD + '    Sequential (s) or random (r)? \n\n' + Ansi.ENDC + PROMPT))
+    print('\n')
     num = 0
     num_file = 0
     total = str(len(list(directory.glob('*'))))
     dir_list = list(directory.glob('*'))
-    picked_files = random.sample(dir_list, n)
-    time.sleep(5)
+    if mode == 'r':
+        n = int(input(Ansi.BOLD + '     How many random files? \n\n' + Ansi.ENDC + PROMPT))
+        print('\n')
+        picked_files = random.sample(dir_list, n)
+    elif mode == 's':
+        n = int(input(Ansi.BOLD + '    Every which file? \n\n' + Ansi.ENDC + PROMPT))
+        print('\n')
+        picked_files = dir_list[0::n]
+    else:
+        return
+    print(Ansi.BOLD + '4)  Processing file(s):' + 3 * '\n' + Ansi.ENDC)
     for file in directory.iterdir():
         num += 1
         print(
@@ -288,7 +300,7 @@ def pick_rand():
                     export_text(out_directory, export, file.name)
                     num_file = num_file + 1
     print(
-        f'    {num_file:6} file(s) picked and exported.'
+        + f'    {num_file:6} file(s) picked and exported.\n'
     )
     return
 
@@ -364,6 +376,34 @@ def markdown_slice(content):
     if k != -1:
         sliced_text = sliced_text + content[k + 13:kk]
     return sliced_text
+
+
+def match_list():
+    directory = select_input_dir()
+    out_directory = select_out_dir()
+    print(Ansi.BOLD + '3.5)  Enter text file path:\n' + Ansi.ENDC)
+    quest_list = import_text(select_dir_prompt())
+    print(Ansi.BOLD + '4)  Processing file(s):' + 3 * '\n' + Ansi.ENDC)
+    num = 0
+    num_file = 0
+    total = str(len(list(directory.glob('*'))))
+    for file in directory.iterdir():
+        num += 1
+        print(
+            2 * (Ansi.UP + Ansi.CLINE)
+            + f'    {Ansi.BR_BLUE}{num:6}{Ansi.ENDC}/{total:6} | File name\n'
+            + 20 * ' ' + file.name
+        )
+        if not file.name == '.DS_Store':
+            if file.name in quest_list:
+                export = import_text(file)
+                if export is not None:
+                    export_text(out_directory, export, file.name)
+                    num_file = num_file + 1
+    print(
+        f'    {num_file:6} file(s) picked and exported.'
+    )
+    return
 
 
 # End-of-file (EOF)
